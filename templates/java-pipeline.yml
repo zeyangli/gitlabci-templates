@@ -1,0 +1,84 @@
+include:
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/build.yml'
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/test.yml'
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/codeanalysis.yml'
+
+variables:
+  BUILD_SHELL: 'mvn clean package  -DskipTests'  ##构建命令
+  CACHE_DIR: 'target/'
+  TEST_SHELL : 'mvn test'                                   ##测试命令
+  JUNIT_REPORT_PATH: 'target/surefire-reports/TEST-*.xml'   ##单元测试报告
+  # 代码扫描
+  SCANNER_HOME : "/usr/local/buildtools/sonar-scanner-3.2.0.1227-linux"
+  SCAN_DIR : "src"
+  ARTIFACT_PATH : 'target/*.jar'                            ##制品目录
+
+  #上传制品库
+  ARTIFACTORY_URL: "http://192.168.1.200:30082/artifactory"
+  ARTIFACTORY_NAME: "cidevops"
+  TARGET_FILE_PATH: "$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/$CI_COMMIT_REF_NAME-$CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID"
+  TARGET_ARTIFACT_NAME: "$CI_PROJECT_NAME-$CI_COMMIT_REF_NAME-$CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID.jar"
+
+  #构建镜像
+  CI_REGISTRY: 'registry.cn-beijing.aliyuncs.com'
+  CI_REGISTRY_USER: '610556220zy'
+  #CI_REGISTRY_PASSWD: 'xxxxxxxx.'
+  IMAGE_NAME: "$CI_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME-$CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID"
+  DOCKER_FILE_PATH: "./Dockerfile"
+
+
+  
+cache:
+  paths:
+    - ${CACHE_DIR}
+    
+stages:
+  - build
+  - test
+  - parallel01
+  - down_artifact
+
+
+build:
+  stage: build
+  extends: .build
+  rules:
+    - when: on_success
+
+
+test:
+  stage: test
+  extends: .test
+  rules:
+    - when: on_success
+
+  
+code_analysis:
+  stage: parallel01
+  extends: .codeanalysis-java
+  
+codeanalysis_mr:
+  stage: parallel01
+  extends: .codeanalysis-mr
+  
+deploy_artifact:
+  stage: parallel01
+  extends: .deploy-artifact
+  
+down_artifact:  
+  stage: down_artifact
+  extends: .down-artifact
+
+
+build_image:
+  stage: parallel01
+  extends: .build-docker
+
+  
+

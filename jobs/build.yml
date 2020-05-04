@@ -1,0 +1,36 @@
+.build:
+  stage: build
+  tags:
+    - build
+  script: 
+    - $BUILD_SHELL
+    - ls
+    
+    
+
+.deploy-artifact:
+  stage: deploy-artifact
+  tags:
+    - build
+  script:
+    - curl -u${ARTIFACT_USER}:${ARTIFACT_PASSWD} -T ${ARTIFACT_PATH} "$ARTIFACTORY_URL/$ARTIFACTORY_NAME/$TARGET_FILE_PATH/$TARGET_ARTIFACT_NAME"
+
+
+
+.down-artifact:
+  stage: down-artifact
+  tags:
+    - build
+  script:
+    - curl -u${ARTIFACT_USER}:${ARTIFACT_PASSWD} -O "$ARTIFACTORY_URL/$ARTIFACTORY_NAME/$TARGET_FILE_PATH/$TARGET_ARTIFACT_NAME"
+    - ls
+
+.build-docker:
+  stage: buildimage
+  tags:
+    - build
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWD  $CI_REGISTRY
+    - docker build -t ${IMAGE_NAME} -f ${DOCKER_FILE_PATH} .
+    - docker push ${IMAGE_NAME} 
+    - docker rmi ${IMAGE_NAME} 

@@ -1,0 +1,27 @@
+include:
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/build.yml'
+    
+variables:
+  BUILD_SHELL: 'npm run build'     ##构建命令                                   
+  CACHE_DIR  : "dist/"             ##构建缓存
+  
+
+cache:
+  paths:
+    - ${CACHE_DIR}
+    - node_modules/
+    
+stages:
+  - install
+  - build
+  
+install:
+  stage: install
+  script:
+    - 'npm install'
+    
+build:
+  stage: build
+  extends: .build
