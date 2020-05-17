@@ -1,0 +1,159 @@
+include:
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/build.yml'
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/test.yml'
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/codeanalysis.yml'
+  - project: 'cidevops/cidevops-gitlabci-service'
+    ref: master
+    file: 'jobs/deploy.yml'
+
+variables:
+  GIT_CLONE_PATH: $CI_BUILDS_DIR/builds/$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/$CI_PIPELINE_ID
+  GIT_CHECKOUT: "false"
+  MVN_OPTS: "-Dmaven.repo.local=/home/gitlab-runner/m2"
+  BUILD_SHELL: 'mvn clean package  -DskipTests -Dmaven.repo.local=/home/gitlab-runner/ci-build-cache/maven  --settings=./settings.xml'  ##构建命令
+  TEST_SHELL : 'mvn test -Dmaven.repo.local=/home/gitlab-runner/ci-build-cache/maven  --settings=./settings.xml'                        ##测试命令
+  JUNIT_REPORT_PATH: 'target/surefire-reports/TEST-*.xml'   ##单元测试报告
+  
+  # 代码扫描
+  SCANNER_HOME : ""
+  SCAN_DIR : "src"
+  ARTIFACT_PATH : 'target/*.jar'                            ##制品目录
+
+  #上传制品库
+  ARTIFACTORY_URL: "http://192.168.1.200:30082/artifactory"
+  ARTIFACTORY_NAME: "cidevops"
+  TARGET_FILE_PATH: "$CI_PROJECT_NAMESPACE/$CI_PROJECT_NAME/$CI_COMMIT_REF_NAME-$CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID"
+  TARGET_ARTIFACT_NAME: "$CI_PROJECT_NAME-$CI_COMMIT_REF_NAME-$CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID.jar"
+
+  #构建镜像
+  CI_REGISTRY: 'registry.cn-beijing.aliyuncs.com'
+  CI_REGISTRY_USER: '610556220zy'
+  #CI_REGISTRY_PASSWD: 'xxxxxxxx.'
+  IMAGE_NAME: "$CI_REGISTRY/$CI_PROJECT_PATH:$CI_COMMIT_REF_NAME-$CI_COMMIT_SHORT_SHA-$CI_PIPELINE_ID"
+  DOCKER_FILE_PATH: "./Dockerfile"
+
+  #部署k8s
+  RUN_DEPLOY: "yes"
+  APP_NAME: "$CI_PROJECT_NAME"
+  CONTAINER_PORT: 8081
+  NODE_PORT: 30185
+  ENV_NAME: "staging"
+  ENV_URL: "http://192.168.1.200:30185"
+  NAMESPACE: "$CI_PROJECT_NAME-$CI_PROJECT_ID-$CI_ENVIRONMENT_SLUG"
+  
+  
+  
+image: docker:latest
+
+    
+stages:
+  - build
+  - test
+  - parallel01
+  - down_artifact
+  - deploy
+  - interface_test
+
+before_script:
+  - ls /home/gitlab-runner/ci-build-cache/builds/
+  - echo  $CI_BUILDS_DIR
+  - echo  $KUBE_URL $KUBE_TOKEN $KUBE_CA_PEM $KUBE_CA_PEM_FILE
+  - export
+
+
+build:
+  variables:
+    GIT_CHECKOUT: "true"
+  tags:
+    - k8s
+  image: maven:3.6.3-jdk-8
+  stage: build
+  extends: .build
+  rules:
+    - when: on_success
+  after_script:
+    - ls target/
+
+test:
+  before_script:
+    - ls target/
+  tags:
+    - k8s
+  image: maven:3.6.3-jdk-8
+  stage: test
+  extends: .test
+  rules:
+    - when: on_success
+  after_script:
+    - ls target/
+
+code_analysis:
+  tags:
+    - k8s
+  image: sonarsource/sonar-scanner-cli:latest
+  stage: parallel01
+  script:
+    - ls target/
+    - echo $CI_MERGE_REQUEST_IID $CI_MERGE_REQUEST_SOURCE_BRANCH_NAME  $CI_MERGE_REQUEST_TARGET_BRANCH_NAME
+    - "sonar-scanner -Dsonar.projectKey=${CI_PROJECT_NAME} \
+                  -Dsonar.projectName=${CI_PROJECT_NAME} \
+                  -Dsonar.projectVersion=${CI_COMMIT_REF_NAME} \
+                  -Dsonar.ws.timeout=30 \
+                  -Dsonar.projectDescription=${CI_PROJECT_TITLE} \
+                  -Dsonar.links.homepage=${CI_PROJECT_URL} \
+                  -Dsonar.sources=${SCAN_DIR} \
+                  -Dsonar.sourceEncoding=UTF-8 \
+                  -Dsonar.java.binaries=target/classes \
+                  -Dsonar.java.test.binaries=target/test-classes \
+                  -Dsonar.java.surefire.report=target/surefire-reports \
+                  -Dsonar.host.url=http://192.168.1.200:30090 \
+                  -Dsonar.login=ee2bcb37deeb6dfe3a07fe08fb529559b00c1b7b \
+                  -Dsonar.branch.name=${CI_COMMIT_REF_NAME}" 
+                  
+build_image:
+  before_script:
+    - ls target/
+  tags:
+    - k8s
+  image: docker:latest
+  services:
+    - name: docker:dind
+  stage: parallel01
+  extends: .build-docker
+
+
+deploy_k8s:
+  image: lucj/kubectl:1.17.2
+  tags:
+    - k8s
+    - kubernetes-runner
+  stage: deploy
+  script:
+    - kubectl config set-cluster my-cluster --server=${KUBE_URL} --certificate-authority="${KUBE_CA_PEM_FILE}"
+    - kubectl config set-credentials admin --token=${KUBE_TOKEN}
+    - sed -i "s#__namespace__#${NAMESPACE}#g" deployment.yaml 
+    - sed -i "s#__appname__#${APP_NAME}#g" deployment.yaml 
+    - sed -i "s#__containerport__#${CONTAINER_PORT}#g" deployment.yaml 
+    - sed -i "s#__nodeport__#${NODE_PORT}#g" deployment.yaml 
+    - sed -i "s#__imagename__#${IMAGE_NAME}#g" deployment.yaml 
+    - sed -i "s#__CI_ENVIRONMENT_SLUG__#${CI_ENVIRONMENT_SLUG}#g" deployment.yaml 
+    - sed -i "s#__CI_PROJECT_PATH_SLUG__#${CI_PROJECT_PATH_SLUG}#g" deployment.yaml
+    - cat deployment.yaml
+    - kubectl apply -f deployment.yaml  
+  environment:
+    name: $ENV_NAME
+    url: $ENV_URL
+
+  
+interfact_test:
+  inherit:
+    variables: false
+  stage: interface_test
+  extends: .interfacetest
+
